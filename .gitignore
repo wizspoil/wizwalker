@@ -141,3 +141,8 @@ cache/*
 tests_local/
 
 scratchpad.py
+
+
+.direnv
+.pre-commit-config.yaml
+
