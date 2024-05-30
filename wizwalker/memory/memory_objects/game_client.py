@@ -11,6 +11,7 @@ from .client_object import DynamicClientObject
 from .character_registry import DynamicCharacterRegistry
 from .enums import AccountPermissions
 from .gamebryo_presenter import DynamicGamebryoPresenter
+from .fishing_manager import FishingManager
 
 
 # note: not defined
@@ -37,10 +38,8 @@ class GameClient(MemoryObject):
 
     async def free_camera_controller(self) -> Optional[DynamicFreeCameraController]:
         offset = await self.pattern_scan_offset_cached(
-            rb"\x48\x8B\x93\xE8\x1F\x02\x00\x48\x8B\x03\x4C"
-            rb"\x8B\x88\x40\x04\x00\x00\x41\xB8\x01\x00\x00"
-            rb"\x00\x48\x8B\xCB\x48\x3B\xFA\x75\x0E\x48\x8B"
-            rb"\x93\xD8\x1F\x02",
+            rb"\x48\x8B\x93....\x48\x8B\x03\x4C\x8B\x88...."
+            rb"\x41\xB8\x01\x00\x00\x00\x48\x8B\xCB\x48\x3B\xFA\x75",
             3,
             "free_camera_controller",
             0x21fe8
@@ -246,6 +245,10 @@ class GameClient(MemoryObject):
             return None
 
         return DynamicGamebryoPresenter(self.hook_handler, addr)
+
+    async def fishing_manager(self) -> FishingManager:
+        addr = await self.read_value_from_offset(0x22ec8, "unsigned long long")
+        return FishingManager(self.hook_handler, addr)
 
 class CurrentGameClient(GameClient):
     _base_address = None

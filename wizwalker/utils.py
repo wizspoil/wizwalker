@@ -88,6 +88,22 @@ class XYZ:
         return self.yaw(other)
 
 
+class Orient:
+    def __init__(self, pitch: float, roll: float, yaw: float):
+        self.pitch = pitch
+        self.roll = roll
+        self.yaw = yaw
+
+    def __str__(self):
+        return f"<Orient (Pitch: {self.pitch}, roll: {self.roll}, yaw: {self.yaw})>"
+
+    def __repr__(self):
+        return str(self)
+
+    def __iter__(self):
+        return iter((self.pitch, self.roll, self.yaw))
+
+
 class Rectangle:
     def __init__(self, x1: int, y1: int, x2: int, y2: int):
         self.x1 = x1
@@ -333,6 +349,11 @@ def calculate_perfect_yaw(current_xyz: XYZ, target_xyz: XYZ) -> float:
     target_to_origin_line = math.dist(
         (target_xyz.x, target_xyz.y), (current_xyz.x, current_xyz.y - 1)
     )
+
+    if 1.0 - abs(origin_line) > 0.0 or 1.0 - abs(target_line) > 0.0:
+        # will lead to division by 0 if left alone
+        return 0
+
     # target_angle = math.cos(origin_line / target_line)
     target_angle = math.acos(
         (pow(target_line, 2) + pow(origin_line, 2) - pow(target_to_origin_line, 2))
@@ -418,9 +439,6 @@ async def maybe_wait_for_value_with_timeout(
                     return res
 
                 elif value is None and inverse_value and res is not None:
-                    return res
-
-                else:
                     return res
 
             except Exception as e:
@@ -836,3 +854,62 @@ async def _send_keydown_forever(window_handle: int, key: Keycode):
     while True:
         user32.SendMessageW(window_handle, 0x100, key.value, 0)
         await asyncio.sleep(0.05)
+
+# TODO: Can replace this with more generic one if needed, but only here for camera maths
+def multiply3x3matrices(a: list[float], b: list[float]):
+    result = [0.0] * 9
+
+    for i in range(3):
+        for j in range(3):
+            for k in range(3):
+                result[i * 3 + j] += a[i * 3 + k] * b[k * 3 + j]
+
+    return result
+
+def pitch_matrix(pitch: float):
+    result = [0.0] * 9
+
+    s = math.sin(pitch)
+    c = math.cos(pitch)
+
+    result[0] = c
+    result[1] = s
+    result[3] = -s
+    result[4] = c
+    result[8] = 1.0
+
+    return result
+
+def roll_matrix(roll: float):
+    result = [0.0] * 9
+
+    s = math.sin(roll)
+    c = math.cos(roll)
+
+    result[0] = 1.0
+    result[4] = c
+    result[5] = s
+    result[7] = -s
+    result[8] = c
+
+    return result
+
+def yaw_matrix(yaw: float):
+    result = [0.0] * 9
+
+    s = math.sin(yaw)
+    c = math.cos(yaw)
+
+    result[0] = c
+    result[2] = -s
+    result[4] = 1.0
+    result[6] = s
+    result[8] = c
+
+    return result
+
+def make_ypr_matrix(base, orientation: Orient):
+    base = multiply3x3matrices(base, yaw_matrix(orientation.yaw))
+    base = multiply3x3matrices(base, pitch_matrix(orientation.pitch))
+    base = multiply3x3matrices(base, roll_matrix(orientation.roll))
+    return base

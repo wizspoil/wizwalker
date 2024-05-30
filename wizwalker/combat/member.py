@@ -14,22 +14,7 @@ class CombatMember:
 
         self._combatant_control = combatant_control
 
-    # TODO: remove in 2.0
-    async def get_particpant(self):
-        warn(
-            "get_particpant will be removed in 2.0 please use get_participant instead",
-            DeprecationWarning,
-        )
-        part = await self.get_participant()
-
-        if part is None:
-            raise wizwalker.MemoryInvalidated(
-                "This combat member is no longer valid; you most likely need to reget members"
-            )
-
-        return part
-
-    async def get_participant(self):
+    async def get_participant(self) -> "wizwalker.memory.CombatParticipant":
         """
         Get the underlying participant object
         """
@@ -42,7 +27,7 @@ class CombatMember:
 
         return part
 
-    async def get_stats(self):
+    async def get_stats(self) -> "wizwalker.memory.game_stats.DynamicGameStats":
         """
         Get the underlying game stats object
         """

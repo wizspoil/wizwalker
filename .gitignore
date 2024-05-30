@@ -139,3 +139,10 @@ cache/*
 
 # local tests
 tests_local/
+
+scratchpad.py
+
+
+.direnv
+.pre-commit-config.yaml
+

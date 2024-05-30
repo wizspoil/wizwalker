@@ -236,6 +236,7 @@ class SpellEffects(Enum):
     remove_converted_ward = 145
     remove_converted_over_time = 146
     modify_over_time_duration = 147
+    modify_school_pips = 148
 
 
 class EffectTarget(Enum):
@@ -336,3 +337,44 @@ class AccountPermissions(IntFlag):
     # 5 and 6 are probably not used
     unknown5 = 0b100000000000000
     unknown6 = 0b1000000000000000
+
+
+class HangingEffectType(Enum):
+    any = 0
+    ward = 1
+    charm = 2
+    over_time = 3
+    specific = 4
+
+
+class OutputEffectSelector(Enum):
+    all = 0
+    matched_select_rank = 1
+
+
+class CountBasedType(Enum):
+    spell_kills = 0
+    spell_crits = 1
+
+
+class Operator(Enum):
+    AND = 0
+    OR = 1
+
+
+class RequirementTarget(Enum):
+    caster = 0
+    target = 1
+
+
+class MinionType(Enum):
+    is_minion = 0
+    has_minion = 1
+    on_team = 2
+    on_other_team = 3
+    on_any_team = 4
+
+
+class StatusEffect(Enum):
+    stunned = 0
+    confused = 1

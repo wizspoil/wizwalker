@@ -1,6 +1,6 @@
 from typing import Optional
 
-from wizwalker.utils import XYZ
+from wizwalker.utils import XYZ, Orient
 from wizwalker.memory.memory_object import PropertyClass, DynamicMemoryObject
 from wizwalker.memory import memory_objects
 
@@ -39,6 +39,12 @@ class ActorBody(PropertyClass):
             position: The position to write
         """
         await self.write_xyz(88, position)
+
+    async def orientation(self) -> Orient:
+        return await self.read_orient(100)
+
+    async def write_orientation(self, orient: Orient):
+        await self.write_orient(100, orient)
 
     async def pitch(self) -> float:
         """

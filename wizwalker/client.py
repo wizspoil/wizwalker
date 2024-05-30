@@ -1,7 +1,7 @@
 import asyncio
 import struct
 import warnings
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Callable, List, Optional
 
 import pymem
@@ -14,6 +14,7 @@ from . import (
     utils, ExceptionalTimeout,
 )
 from .constants import WIZARD_SPEED
+from .errors import PatternMultipleResults
 from .memory import (
     CurrentActorBody,
     CurrentClientObject,
@@ -28,6 +29,8 @@ from .memory import (
     TeleportHelper,
     MovementTeleportHook,
 )
+from .memory.memory_objects.character_registry import DynamicCharacterRegistry
+from .memory.memory_objects.quest_client_manager import QuestClientManager
 from .mouse_handler import MouseHandler
 from .utils import (
     XYZ,
@@ -70,8 +73,9 @@ class Client:
         self._teleport_helper = TeleportHelper(self.hook_handler)
 
         self._template_ids = None
-        self._is_loading_addr = None
         self._world_view_window = None
+        self._character_registry_addr = None
+        self._quest_client_manager_addr = None
 
         self._movement_update_address = None
         self._movement_update_original_bytes = None
@@ -150,8 +154,18 @@ class Client:
         """
         List of WizClientObjects currently loaded
         """
-        root_client = await self.client_object.parent()
-        return await root_client.children()
+        # A wizard101 update made this cause race conditions.
+        # It now tries to find the root of the tree until it works or runs out of time.
+        async def _impl(self):
+            async def _is_root_object(x):
+                object_template = await x.object_template()
+                return object_template == None
+
+            root_client = await self.client_object.parent()
+            while not (await _is_root_object(root_client)):
+                root_client = await root_client.parent()
+            return await root_client.children()
+        return await maybe_wait_for_any_value_with_timeout(partial(_impl, self), sleep_time=0.05, timeout=1.0)
 
     # TODO: add example
     async def get_base_entities_with_predicate(self, predicate: Callable):
@@ -257,18 +271,53 @@ class Client:
         self._template_ids = await self.cache_handler.get_template_ids()
         return self._template_ids
 
+    async def quest_manager(self) -> QuestClientManager:
+        if not self._quest_client_manager_addr:
+            mov_instruction_addr = await self.hook_handler.pattern_scan(
+                b"\x48\x8B.....\x48\x8B\x97....\x48\x8B.\xE8....\x33\xD2",
+                module="WizardGraphicalClient.exe",
+                return_multiple=False
+            )
+            rip_offset = await self.hook_handler.read_typed(
+                mov_instruction_addr + 3, "int"
+            )
+            # 7 is the length of this instruction
+            self._quest_client_manager_addr = await self.hook_handler.read_typed(mov_instruction_addr + 7 + rip_offset, "unsigned long long")
+        return QuestClientManager(self.hook_handler, self._quest_client_manager_addr)
+
+    async def character_registry(self) -> DynamicCharacterRegistry:
+        if not self._character_registry_addr:
+            # WizardGraphicalClient.exe+FC46F0 - 48 8B 05 89AA4202     - mov rax,[WizardGraphicalClient.exe+33EF180] { (20EA3A70810) }
+            # WizardGraphicalClient.exe+FC46F7 - 48 8B 88 30010000     - mov rcx,[rax+00000130]
+            # WizardGraphicalClient.exe+FC46FE - 48 8B C2              - mov rax,rdx
+            # WizardGraphicalClient.exe+FC4701 - 48 89 0A              - mov [rdx],rcx
+            mov_instruction_addrs = await self.hook_handler.pattern_scan(
+                b"\x48\x8B\x05....\x48\x8B\x88\x30\x01\x00\x00",
+                module="WizardGraphicalClient.exe",
+                return_multiple=True
+            )
+            if len(mov_instruction_addrs) != 2:
+                raise PatternMultipleResults("")
+            mov_instruction_addr = mov_instruction_addrs[0]
+            rip_offset = await self.hook_handler.read_typed(
+                mov_instruction_addr + 3, "int"
+            )
+            # 7 is the length of this instruction
+            self._character_registry_addr = await self.hook_handler.read_typed(mov_instruction_addr + 7 + rip_offset, "unsigned long long")
+        return DynamicCharacterRegistry(self.hook_handler, self._character_registry_addr)
+
     async def quest_id(self) -> int:
         """
         Get the client's current quest id
         """
-        registry = await self.game_client.character_registry()
+        registry = await self.character_registry()
         return await registry.active_quest_id()
 
     async def goal_id(self) -> int:
         """
         Get the client's current goal id
         """
-        registry = await self.game_client.character_registry()
+        registry = await self.character_registry()
         return await registry.active_goal_id()
 
     async def in_battle(self) -> bool:
@@ -287,20 +336,14 @@ class Client:
         If the client is currently in a loading screen
         (does not apply to character load in)
         """
-        if not self._is_loading_addr:
-            mov_instruction_addr = await self.hook_handler.pattern_scan(
-                b"\xC6\x05....\x00\xC6\x80.....\x48\x8B",
-                module="WizardGraphicalClient.exe",
-            )
-            # first 2 bytes are the mov instruction and mov type (C6 05)
-            rip_offset = await self.hook_handler.read_typed(
-                mov_instruction_addr + 2, "int"
-            )
-            # 7 is the length of this instruction
-            self._is_loading_addr = mov_instruction_addr + 7 + rip_offset
-
-        # 1 -> can't move (loading) 0 -> can move (not loading)
-        return await self.hook_handler.read_typed(self._is_loading_addr, "bool")
+        view = await self.get_world_view_window()
+        try:
+            # if this window exists we are loading
+            await view.get_child_by_name("TransitionWindow")
+        except ValueError:
+            return False
+        else:
+            return True
 
     async def is_in_dialog(self) -> bool:
         """
@@ -419,24 +462,24 @@ class Client:
             x: X to move to
             y: Y to move to
         """
-        current_xyz = await self.body.position()
+        client_obj = self.client_object
+        body = await client_obj.actor_body()
+        current_xyz = await body.position()
         # (40 / 100) + 1 = 1.4
-        speed_multiplier = ((await self.client_object.speed_multiplier()) / 100) + 1
+        speed_multiplier = ((await client_obj.speed_multiplier()) / 100) + 1
         target_xyz = utils.XYZ(x, y, current_xyz.z)
         distance = current_xyz - target_xyz
         move_seconds = distance / (WIZARD_SPEED * speed_multiplier)
         yaw = utils.calculate_perfect_yaw(current_xyz, target_xyz)
 
-        await self.body.write_yaw(yaw)
+        await body.write_yaw(yaw)
         await utils.timed_send_key(self.window_handle, Keycode.W, move_seconds)
 
-    # TODO: 2.0 remove move_after as it isn't needed anymore
     async def teleport(
             self,
             xyz: XYZ,
             yaw: float = None,
             *,
-            move_after: bool = False,
             wait_on_inuse: bool = True,
             wait_on_inuse_timeout: float = 1.0,
             purge_on_after_unuser_fixer: bool = True,
@@ -450,53 +493,7 @@ class Client:
             yaw: yaw to set or None to not change
 
         Keyword Args:
-            move_after: depreciated
             wait_on_inuse: If we should wait for the update bool to be False
-            wait_on_inuse_timeout: Time to wait for inuse flag to be setback
-            purge_on_after_unuser_fixer: If should wait for inuse flag after and reset if not set
-            purge_on_after_unuser_fixer_timeout: Time to wait for inuse flag to reset if not set
-        """
-        # we do this because the old teleport only required the body hook
-        client_object = await self.body.parent_client_object()
-        client_object_addr = await client_object.read_base_address()
-
-        await self._teleport_object(
-            client_object_addr,
-            xyz,
-            wait_on_inuse,
-            wait_on_inuse_timeout,
-            purge_on_after_unuser_fixer,
-            purge_on_after_unuser_fixer_timeout,
-        )
-
-        if move_after:
-            warnings.warn(DeprecationWarning("Move after will be removed in 2.0"))
-            await self.send_key(Keycode.D, 0.1)
-
-        if yaw is not None:
-            await self.body.write_yaw(yaw)
-
-    async def pet_teleport(
-            self,
-            xyz: XYZ,
-            yaw: float = None,
-            *,
-            move_after: bool = True,
-            wait_on_inuse: bool = True,
-            wait_on_inuse_timeout: float = 1.0,
-            purge_on_after_unuser_fixer: bool = True,
-            purge_on_after_unuser_fixer_timeout: float = 0.6,
-    ):
-        """
-        Teleport while playing as pet
-
-        Args:
-            xyz: xyz to teleport to
-            yaw: yaw to set or None to not change
-
-        Keyword Args:
-            move_after: depreciated
-            wait_on_inuse: If should wait for inuse flag to be setback
             wait_on_inuse_timeout: Time to wait for inuse flag to be setback
             purge_on_after_unuser_fixer: If should wait for inuse flag after and reset if not set
             purge_on_after_unuser_fixer_timeout: Time to wait for inuse flag to reset if not set
@@ -511,10 +508,6 @@ class Client:
             purge_on_after_unuser_fixer,
             purge_on_after_unuser_fixer_timeout,
         )
-
-        if move_after:
-            warnings.warn(DeprecationWarning("Move after will be removed in 2.0"))
-            await self.send_key(Keycode.D, 0.1)
 
         if yaw is not None:
             await self.body.write_yaw(yaw)
@@ -583,7 +576,7 @@ class Client:
 
         return self._je_instruction_forward_backwards
 
-    async def camera_swap(self):
+    async def camera_swap(self, seamless_freecam=True):
         """
         Swaps the current camera controller
         """
@@ -591,9 +584,9 @@ class Client:
             await self.camera_elastic()
 
         else:
-            await self.camera_freecam()
+            await self.camera_freecam(seamless_from_elastic=seamless_freecam)
 
-    async def camera_freecam(self):
+    async def camera_freecam(self, seamless_from_elastic=True):
         """
         Switches to the freecam camera controller
         """
@@ -608,6 +601,10 @@ class Client:
         free_address = await free.read_base_address()
 
         await self._switch_camera(free_address, elastic_address)
+
+        if seamless_from_elastic:
+            await free.write_position(await elastic.position())
+            await free.update_orientation(await elastic.orientation())
 
     async def camera_elastic(self):
         """
@@ -634,8 +631,8 @@ class Client:
 
         movement_update_address = await self._get_movement_update_address()
         self._movement_update_original_bytes = await self.hook_handler.read_bytes(movement_update_address, 3)
-        # ret
-        await self.hook_handler.write_bytes(movement_update_address, b"\xC3\x90\x90")
+        # 3x nop
+        await self.hook_handler.write_bytes(movement_update_address, b"\x90\x90\x90")
 
         self._movement_update_patched = True
 
@@ -653,11 +650,19 @@ class Client:
             return self._movement_update_address
 
         self._movement_update_address = await self.hook_handler.pattern_scan(
-            rb"\x48\x8B\xC4\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48"
-            rb"\x8D\xA8\xE8\xFD\xFF\xFF\x48\x81\xEC\xE0\x02\x00\x00\x48\xC7"
-            rb"\x45\x28\xFE\xFF\xFF\xFF",
-            module="WizardGraphicalClient.exe",
+            rb"\xFF\x50.\x48\x8B\x83....\x48\x8D..\x48\x2B",
+            module="WizardGraphicalClient.exe"
         )
+
+        # OLD PATTERN; DO NOT REMOVE. Might be helpful to update the new pattern in case it breaks.
+        # self._movement_update_address = await self.hook_handler.pattern_scan(
+        #     rb"\x48\x8B\xC4\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48"
+        #     rb"\x8D\xA8....\x48\x81\xEC....\x48\xC7.........\x48\x89\x58."
+        #     rb"\x0F\x29\x70.\x0F\x29\x78.\x44\x0F\x29\x40.\x44\x0F\x29\x48."
+        #     rb"\x44\x0F\x29.....\x44\x0F\x29.....\x44\x0F\x29.....\x48\x8B"
+        #     rb"\x05....\x48\x33\xC4\x48\x89\x85....\x44",
+        #     module="WizardGraphicalClient.exe",
+        # )
 
         return self._movement_update_address
 
@@ -685,7 +690,7 @@ class Client:
                 b"\x48\xBA" + packed_new_camera_address +  # mov rdx, new_cam_addr
                 b"\x49\xC7\xC0\x01\x00\x00\x00"  # mov r8, 0x1
                 b"\x48\x8B\x01"  # mov rax, [rcx]
-                b"\x48\x8B\x80\x40\x04\x00\x00"  # mov rax, [rax+0x440]
+                b"\x48\x8B\x80\x58\x04\x00\x00"  # mov rax, [rax+0x458]
                 b"\x49\x89\xC1"  # mov r9, rax
                 b"\xFF\xD0"  # call rax
 

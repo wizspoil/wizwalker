@@ -5,7 +5,7 @@ from warnings import warn
 from .member import CombatMember
 from .card import CombatCard
 from ..memory import DuelPhase, EffectTarget, SpellEffects, WindowFlags
-from wizwalker import utils, WizWalkerMemoryError, MemoryInvalidated
+from wizwalker import utils, WizWalkerMemoryError, MemoryInvalidated, MemoryReadError, ReadingEnumFailed
 
 
 class CombatHandler:
@@ -30,28 +30,18 @@ class CombatHandler:
         """
         while await self.in_combat():
             await self.wait_for_planning_phase()
+            try:
+                if await self.client.duel.duel_phase() != DuelPhase.planning:
+                    break
+            except (ReadingEnumFailed, MemoryReadError):
+                break
             round_number = await self.round_number()
+            await asyncio.sleep(0.2) # make sure game manages to display UI in time
             # TODO: handle this taking longer than planning timer time
             await self.handle_round()
             await self.wait_until_next_round(round_number)
 
         self._spell_check_boxes = None
-
-    # TODO: remove in 2.0
-    async def wait_for_hand_visible(self, sleep_time: float = 0.5):
-        """
-        Wait for the hand window to be visible
-        """
-        warn(
-            "This method is depreciated and will be removed in 2.0 please use wait_for_planning_phase instead",
-            DeprecationWarning,
-        )
-
-        hand = await self.client.root_window.get_windows_with_name("Hand")
-        # this window is always in ui tree
-        hand = hand[0]
-        while WindowFlags.visible not in await hand.flags():
-            await asyncio.sleep(sleep_time)
 
     async def wait_for_planning_phase(self, sleep_time: float = 0.5):
         """
@@ -110,6 +100,7 @@ class CombatHandler:
         spell_checkbox_windows = await self.client.root_window.get_windows_with_type(
             "SpellCheckBox"
         )
+        spell_checkbox_windows = [x for x in spell_checkbox_windows if await x.name() != "PetCard"]
 
         self._spell_check_boxes = spell_checkbox_windows
         return self._spell_check_boxes

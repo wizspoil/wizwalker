@@ -10,7 +10,7 @@ from wizwalker.errors import (
     PatternFailed,
     PatternMultipleResults
 )
-from wizwalker.utils import XYZ
+from wizwalker.utils import XYZ, Orient
 from .handler import HookHandler
 from .memory_reader import MemoryReader
 
@@ -233,6 +233,13 @@ class MemoryObject(MemoryReader):
     async def write_xyz(self, offset: int, xyz: XYZ):
         await self.write_vector(offset, (xyz.x, xyz.y, xyz.z))
 
+    async def read_orient(self, offset: int) -> Orient:
+        p, r, y = await self.read_vector(offset)
+        return Orient(p, r, y)
+
+    async def write_orient(self, offset, orient: Orient):
+        await self.write_vector(offset, (orient.pitch, orient.roll, orient.yaw))
+
     async def read_enum(self, offset, enum: Type[Enum]):
         value = await self.read_value_from_offset(offset, "int")
         try:
@@ -366,18 +373,18 @@ class MemoryObject(MemoryReader):
 
     async def _get_std_map_children(self, node, mapped_type, mapped_return):
         # some keys may be smaller but the entire 8 bytes seemed to always be reserved
-        key = await self.read_typed(node + 0x20, "unsigned long long")
-        mapped_data = await self.read_typed(node + 0x28, "unsigned long long")
-
-        mapped_return[key] = mapped_type(self.hook_handler, mapped_data)
-
         is_leaf = await self.read_typed(node + 0x19, "bool")
         if not is_leaf:
+            key = await self.read_typed(node + 0x20, "unsigned long long")
+            mapped_data = await self.read_typed(node + 0x28, "unsigned long long")
+
+            mapped_return[key] = mapped_type(self.hook_handler, mapped_data)
+
             if left_node := await self.read_typed(node, "unsigned long long"):
-                await self._get_std_map_children(left_node, mapped_return)
+                await self._get_std_map_children(left_node, mapped_type, mapped_return)
 
             if right_node := await self.read_typed(node + 0x10, "unsigned long long"):
-                await self._get_std_map_children(right_node, mapped_return)
+                await self._get_std_map_children(right_node, mapped_type, mapped_return)
 
     # TODO: 2.0 replace this with complex memory read type
     #  class StdMap(MemoryComplex):
@@ -389,6 +396,8 @@ class MemoryObject(MemoryReader):
 
         root = await self.read_value_from_offset(offset, "unsigned long long")
         first_node = await self.read_typed(root + 0x8, "unsigned long long")
+        if first_node == root:
+          return {}
 
         await self._get_std_map_children(first_node, mapped_type, mapped_return)
         return mapped_return

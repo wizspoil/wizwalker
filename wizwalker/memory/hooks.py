@@ -12,19 +12,11 @@ from .memory_reader import MemoryReader
 from wizwalker.constants import kernel32
 
 
-# TODO: 2.0 delete (useless)
-def pack_to_int_or_longlong(num: int) -> bytes:
-    warnings.warn(DeprecationWarning("Will be removed in the next major release"))
-    try:
-        return struct.pack("<i", num)
-    except struct.error:
-        return struct.pack("<q", num)
-
-
 class MemoryHook(MemoryReader):
-    def __init__(self, hook_handler):
+    def __init__(self, hook_handler, hook_cache = {}):
         super().__init__(hook_handler.process)
         self.hook_handler = hook_handler
+        self._hook_cache = hook_cache
         self.jump_original_bytecode = None
 
         self.hook_address = None
@@ -35,6 +27,22 @@ class MemoryHook(MemoryReader):
 
         # so we can dealloc it on unhook
         self._allocated_addresses = []
+
+    def _get_my_cache(self):
+        if self._hook_cache is None:
+            self._hook_cache = {type(self): {}}
+        if type(self) not in self._hook_cache:
+            self._hook_cache[type(self)] = {}
+        return self._hook_cache[type(self)]
+    
+    def _is_cached(self, name):
+        return name in self._get_my_cache()
+
+    def _cache(self, name, value):
+        self._get_my_cache()[name] = value
+
+    def _get_cached(self, name):
+        return self._get_my_cache()[name]
 
     async def alloc(self, size: int) -> int:
         """
@@ -239,56 +247,22 @@ class PlayerStatHook(SimpleHook):
 
 
 class QuestHook(SimpleHook):
-    pattern = rb".........\xF3\x0F\x11\x45\xE0.........\xF3\x0F\x11\x4D\xE4.........\xF3\x0F\x11\x45\xE8\x48"
+    pattern = rb"\xF3\x41\x0F\x10.\xFC\x0C\x00\x00\xF3\x0F\x11"
     exports = [("cord_struct", 4)]
     noops = 4
 
     async def bytecode_generator(self, packed_exports):
         # fmt: off
         bytecode = (
-                b"\x50"  # push rcx
-                b"\x49\x8D\x86\xFC\x0C\x00\x00"  # lea rcx,[r14+CFC]
-                b"\x48\xA3" + packed_exports[0][1] +  # mov [export],rcx
-                b"\x58"  # pop rcx
-                b"\xF3\x41\x0F\x10\x86\xFC\x0C\x00\x00"  # original code
-        )
-        # fmt: on
-        return bytecode
-
-
-# NOTE: CombatPlanningPhaseWindow::handle
-class DuelHook(SimpleHook):
-    pattern = (
-        rb"\x44\x0F\xB6\xE0\x88\x44\x24\x60\xE8....\x44\x8D\x6B\x0F"
-        rb"\x44\x8D\x73\x10\x4C\x8D.....\x83\xF8\x64\x7E\x0A\xE8....\xE9"
-    )
-    exports = [("current_duel_addr", 8), ("current_duel_phase", 4)]
-    instruction_length = 8
-    noops = 3
-
-    async def bytecode_generator(self, packed_exports):
-        # fmt: off
-        bytecode = (
-                # if al == 1 rcx is ClientDuel
-                b"\x84\xc0"  # test al,al
-                b"\x74\x20"  # je 32 (to original code)
                 b"\x50"  # push rax
-                b"\x48\x89\xc8"  # mov rax,rcx
-                b"\x48\xA3" + packed_exports[0][1] +  # movabs [current_duel_addr],rax
-                b"\x48\x8B\x80\xC4\x00\x00\x00"  # mov rax,[rax+C4]
-                b"\x48\xA3" + packed_exports[1][1] +  # movabs [current_duel_phase],rax
+                b"\x49\x8D\x87\xFC\x0C\x00\x00"  #lea rax,[r15+00000CFC]
+
+                b"\x48\xA3" + packed_exports[0][1] +  # mov [export],rax
                 b"\x58"  # pop rax
-                # original code
-                b"\x44\x0F\xB6\xE0"  # movzx r12d,al
-                b"\x88\x44\x24\x60"  # mov [rsp+60],al
+                b"\xF3\x41\x0F\x10\x87\xFC\x0C\x00\x00"  # original code 
         )
         # fmt: on
-
         return bytecode
-
-    async def posthook(self):
-        # init duel phase with 7 so in_combat returns False
-        await self.write_typed(self.current_duel_phase, 7, "unsigned int")
 
 
 class ClientHook(SimpleHook):
@@ -415,7 +389,7 @@ class MovementTeleportHook(SimpleHook):
         target_address = jes[0]
 
         inside_event_je_addr = await self.pattern_scan(
-            rb"\x74.\xF3\x0F\x10\x55\xA8",
+            rb"\x74.\xF3\x0F\x10\x55\x88",
             module="WizardGraphicalClient.exe",
         )
         event_dispatch_je_addr = await self.pattern_scan(
@@ -567,21 +541,20 @@ class User32GetClassInfoBaseHook(AutoBotBaseHook):
     )
     # rounded down
     AUTOBOT_SIZE = 1200
-
-    _autobot_addr = None
-    # How far into the function we are
-    _autobot_bytes_offset = 0
-
-    _autobot_original_bytes = None
-
-    # this is really hacky
-    _hooked_instances = 0
+    
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._hooked_instances = 0
+        # How far into the function we are
+        self._autobot_bytes_offset = 0 
+        self._autobot_addr = None
+        self._autobot_original_bytes = None
 
     async def alloc(self, size: int) -> int:
         if self._autobot_addr is None:
             addr = await self.get_address_from_symbol("user32.dll", "GetClassInfoExA")
             # this is so all instances have the address
-            User32GetClassInfoBaseHook._autobot_addr = addr
+            self._autobot_addr = addr
 
         if self._autobot_bytes_offset + size > self.AUTOBOT_SIZE:
             raise RuntimeError(
@@ -589,33 +562,33 @@ class User32GetClassInfoBaseHook(AutoBotBaseHook):
             )
 
         if self._autobot_original_bytes is None:
-            User32GetClassInfoBaseHook._autobot_original_bytes = await self.read_bytes(
+            self._autobot_original_bytes = await self.read_bytes(
                 self._autobot_addr, self.AUTOBOT_SIZE
             )
             # this is so instructions don't collide
             await self.write_bytes(self._autobot_addr, b"\x00" * self.AUTOBOT_SIZE)
 
         addr = self._autobot_addr + self._autobot_bytes_offset
-        User32GetClassInfoBaseHook._autobot_bytes_offset += size
+        self._autobot_bytes_offset += size
 
         return addr
 
     async def hook(self) -> Any:
-        User32GetClassInfoBaseHook._hooked_instances += 1
+        self._hooked_instances += 1
         return await super().hook()
 
     async def unhook(self):
-        User32GetClassInfoBaseHook._hooked_instances -= 1
+        self._hooked_instances -= 1
         await self.write_bytes(self.jump_address, self.jump_original_bytecode)
 
         if self._hooked_instances == 0:
             await self.write_bytes(self._autobot_addr, self._autobot_original_bytes)
-            User32GetClassInfoBaseHook._autobot_bytes_offset = 0
+            self._autobot_bytes_offset = 0
 
 
 class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
-    def __init__(self, memory_handler):
-        super().__init__(memory_handler)
+    def __init__(self, memory_handler, hook_cache = {}):
+        super().__init__(memory_handler, hook_cache=hook_cache)
         self.mouse_pos_addr = None
 
         self.toggle_bool_addrs = ()
@@ -625,7 +598,7 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
         """
         Writes jump_bytecode to jump address and hook bytecode to hook address
         """
-        User32GetClassInfoBaseHook._hooked_instances += 1
+        self._hooked_instances += 1
 
         self.jump_address = await self.get_jump_address()
         self.hook_address = await self.get_hook_address(50)
@@ -655,13 +628,26 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
         await self.posthook()
 
     async def posthook(self):
-        bool_one_address = await self.pattern_scan(
-            rb"\x00\xFF\x50\x18\x66\xC7", module="WizardGraphicalClient.exe"
-        )
-        bool_two_address = await self.pattern_scan(
-            rb"\xC6\x86...\x00.\x33\xFF",
-            module="WizardGraphicalClient.exe",
-        )
+        bool_one_address = None
+        if not self._is_cached("bool_one_address"):
+            if a := await self.pattern_scan(
+                rb"\x00\xFF\x50\x18\x66\xC7", module="WizardGraphicalClient.exe"
+            ):
+                self._cache("bool_one_address", a)
+                bool_one_address = a
+        else:
+            bool_one_address = self._get_cached("bool_one_address")
+
+        bool_two_address = None
+        if not self._is_cached("bool_two_address"):
+            if a := await self.pattern_scan(
+                rb"\xC6\x86...\x00\x00\x33\xFF",
+                module="WizardGraphicalClient.exe",
+            ):
+                self._cache("bool_two_address", a)
+                bool_two_address = a
+        else:
+            bool_two_address = self._get_cached("bool_two_address")
 
         if bool_one_address is None or bool_two_address is None:
             raise RuntimeError("toogle bool address pattern failed")
@@ -674,23 +660,35 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
         await self.write_bytes(bool_one_address, b"\x01")
         await self.write_bytes(bool_two_address, b"\x01")
 
-        set_cursor_pos = await self.get_address_from_symbol("user32.dll", "SetCursorPos")
+        set_cursor_pos = None
+        if not self._is_cached("SetCursorPos"):
+            if a := await self.get_address_from_symbol("user32.dll", "SetCursorPos"):
+                self._cache("SetCursorPos", a)
+                set_cursor_pos = a
+        else:
+            set_cursor_pos = self._get_cached("SetCursorPos")
         self.set_cursor_pos = (set_cursor_pos, await self.read_bytes(set_cursor_pos, 6))
 
         # ret + 5 noops
         await self.write_bytes(set_cursor_pos, b"\xC3" + (b"\x90" * 5))
 
     async def set_mouse_pos_addr(self):
-        self.mouse_pos_addr = await self.allocate(8)
-
-    async def free_mouse_pos_addr(self):
-        await self.free(self.mouse_pos_addr)
+        if not self._is_cached("mouse_pos_addr"):
+            self.mouse_pos_addr = await self.allocate(8)
+            self._cache("mouse_pos_addr", self.mouse_pos_addr)
+        else:
+            self.mouse_pos_addr = self._get_cached("mouse_pos_addr")
 
     async def get_jump_address(self) -> int:
         """
         gets the address to write jump at
         """
-        return await self.get_address_from_symbol("user32.dll", "GetCursorPos")
+        if not self._is_cached("GetCursorPos"):
+            if a := await self.get_address_from_symbol("user32.dll", "GetCursorPos"):
+                self._cache("GetCursorPos", a)
+                return a
+        else:
+            return self._get_cached("GetCursorPos")
 
     async def get_jump_bytecode(self) -> bytes:
         # distance = end - start
@@ -717,7 +715,6 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
 
     async def unhook(self):
         await super().unhook()
-        await self.free_mouse_pos_addr()
         for bool_addr in self.toggle_bool_addrs:
             await self.write_bytes(bool_addr, b"\x00")
 
