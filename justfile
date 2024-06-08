@@ -1,21 +1,38 @@
-set windows-powershell
+# show this list
+default:
+    just --list
 
-# install enviroment
-install:
-  poetry install
+# does a version bump commit
+bump-commit type: && create-tag
+    poetry version {{type}}
+    git commit -am "$(poetry version | awk '{print $2}' | xargs echo "bump to")"
+    git push
 
-# start wiz instance and then start debug cli
-cli: install
-  poetry run wizwalker start-wiz
-  poetry run wizwalker
+# creates a new tag for the current version
+create-tag:
+    git fetch --tags
+    poetry version | awk '{print $2}' | xargs git tag
+    git push --tags
 
-# build docs
-docs: install
-  poetry run pdoc -t pdoc_template ./wizwalker/
+# update deps
+update:
+    nix flake update
+    # the poetry devs dont allow this with normal update for some unknown reason
+    poetry up --latest
 
-# publish a major, minor, or patch version
-publish TYPE: install
-  poetry version {{TYPE}}
-  poetry build
-  poetry publish
+# do a dep bump commit with tag and version
+update-commit: update && create-tag
+    poetry version patch
+    git commit -am "bump deps"
+    git push
 
+# run debug build
+run:
+    nix run . -- --debug
+
+# format
+format:
+    # TODO: treefmt?
+    isort . --skip-gitignore
+    black .
+    alejandra .
