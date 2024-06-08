@@ -7,8 +7,8 @@ import click
 from click_default_group import DefaultGroup
 from loguru import logger
 
-from wizwalker import Wad, WizWalker, utils
-from wizwalker.cli import start_console
+from wizwalker import Wad, ClientHandler, utils
+from wizwalker.cli.console import start_console
 
 
 logger.enable("wizwalker")
@@ -40,7 +40,7 @@ def cli():
     if sys.platform != "win32":
         raise RuntimeError(f"This program is windows only, not {sys.platform}")
 
-    walker = WizWalker()
+    walker = ClientHandler()
     start_console(locals={"walker": walker})
 
 
@@ -51,7 +51,10 @@ def cli():
 )
 @click.argument("logins", nargs=-1)
 @click.option(
-    "--nowait", is_flag=True, default=False, help="Don't wait for completion of startup process",
+    "--nowait",
+    is_flag=True,
+    default=False,
+    help="Don't wait for completion of startup process",
 )
 def start_wiz(instances, logins, nowait):
     """
@@ -65,7 +68,9 @@ def start_wiz(instances, logins, nowait):
     if num_logins > instances:
         instances = num_logins
 
-    asyncio.run(utils.start_instances_with_login(instances, logins, wait_for_ready=not nowait))
+    asyncio.run(
+        utils.start_instances_with_login(instances, logins, wait_for_ready=not nowait)
+    )
 
 
 @main.group()
@@ -82,7 +87,7 @@ def wad():
 #     """
 #     Create a wad from a directory
 #     """
-#     click.echo("Not implimented")
+#     click.echo("Not implemented")
 
 
 @wad.command(short_help="Unarchive a wad into a directory")
@@ -99,7 +104,7 @@ def unarchive(input_wad, output_dir):
     path = Path(output_dir)
 
     if not path.exists():
-        if click.confirm(f"{path} does not exsist; create it?", default=True):
+        if click.confirm(f"{path} does not exist; create it?", default=True):
             path.mkdir(exist_ok=True)
         else:
             exit(0)
@@ -162,7 +167,7 @@ def extract(input_wad, file_name):
 #     """
 #     Insert a single file into a wad
 #     """
-#     click.echo("Not implimented")
+#     click.echo("Not implemented")
 
 
 if __name__ == "__main__":
