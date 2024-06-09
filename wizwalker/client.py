@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import struct
-import warnings
-from functools import cached_property, partial
-from typing import Callable, List, Optional
+import typing
+from functools import cached_property
+from typing import TYPE_CHECKING
 
 import pymem
 
@@ -11,7 +13,8 @@ from . import (
     Keycode,
     MemoryReadError,
     ReadingEnumFailed,
-    utils, ExceptionalTimeout,
+    utils,
+    ExceptionalTimeout,
 )
 from .constants import WIZARD_SPEED
 from .errors import PatternMultipleResults
@@ -38,9 +41,13 @@ from .utils import (
     get_window_title,
     set_window_title,
     get_window_rectangle,
-    wait_for_value,
-    maybe_wait_for_any_value_with_timeout, maybe_wait_for_value_with_timeout,
+    maybe_wait_for_any_value_with_timeout,
+    maybe_wait_for_value_with_timeout,
 )
+
+if TYPE_CHECKING:
+    from .memory.memory_objects.client_object import DynamicClientObject
+    from .memory.memory_objects.window import DynamicWindow
 
 
 class Client:
@@ -128,13 +135,13 @@ class Client:
         """
         return utils.get_pid_from_handle(self.window_handle)
 
-    def is_running(self):
+    def is_running(self) -> bool:
         """
         If this client is still running
         """
         return check_if_process_running(self._pymem.process_handle)
 
-    async def zone_name(self) -> Optional[str]:
+    async def zone_name(self) -> str | None:
         """
         Client's current zone name
         """
@@ -154,9 +161,10 @@ class Client:
         """
         List of WizClientObjects currently loaded
         """
+
         # A wizard101 update made this cause race conditions.
         # It now tries to find the root of the tree until it works or runs out of time.
-        async def _impl(self):
+        async def _impl():
             async def _is_root_object(x):
                 object_template = await x.object_template()
                 return object_template == None
@@ -165,10 +173,16 @@ class Client:
             while not (await _is_root_object(root_client)):
                 root_client = await root_client.parent()
             return await root_client.children()
-        return await maybe_wait_for_any_value_with_timeout(partial(_impl, self), sleep_time=0.05, timeout=1.0)
+
+        return await maybe_wait_for_any_value_with_timeout(
+            _impl, sleep_time=0.05, timeout=1.0
+        )
 
     # TODO: add example
-    async def get_base_entities_with_predicate(self, predicate: Callable):
+    async def get_base_entities_with_predicate(
+        self,
+        predicate: typing.Callable[[DynamicClientObject], typing.Awaitable[bool]],
+    ) -> list[DynamicClientObject]:
         """
         Get entities with a predicate
 
@@ -196,6 +210,7 @@ class Client:
         Returns:
             List of the matching entities
         """
+
         async def _pred(entity):
             object_template = await entity.object_template()
             return await object_template.object_name() == name
@@ -212,6 +227,7 @@ class Client:
         Returns:
             List of the matching entities
         """
+
         async def predicate(entity):
             mob_display_name = await entity.display_name()
 
@@ -222,7 +238,7 @@ class Client:
 
         return await self.get_base_entities_with_predicate(predicate)
 
-    async def get_world_view_window(self):
+    async def get_world_view_window(self) -> DynamicWindow:
         """
         Get the world view window
         """
@@ -236,7 +252,7 @@ class Client:
         return self._world_view_window
 
     async def activate_hooks(
-            self, *, wait_for_ready: bool = True, timeout: float = None
+        self, *, wait_for_ready: bool = True, timeout: float | None = None
     ):
         """
         Activate all memory hooks but mouseless
@@ -260,7 +276,7 @@ class Client:
         await self._unpatch_movement_update()
         await self.hook_handler.close()
 
-    async def get_template_ids(self) -> dict:
+    async def get_template_ids(self) -> dict[str, str]:
         """
         Get a dict of template ids mapped to their value
         ids are str
@@ -276,13 +292,15 @@ class Client:
             mov_instruction_addr = await self.hook_handler.pattern_scan(
                 b"\x48\x8B.....\x48\x8B\x97....\x48\x8B.\xE8....\x33\xD2",
                 module="WizardGraphicalClient.exe",
-                return_multiple=False
+                return_multiple=False,
             )
             rip_offset = await self.hook_handler.read_typed(
                 mov_instruction_addr + 3, "int"
             )
             # 7 is the length of this instruction
-            self._quest_client_manager_addr = await self.hook_handler.read_typed(mov_instruction_addr + 7 + rip_offset, "unsigned long long")
+            self._quest_client_manager_addr = await self.hook_handler.read_typed(
+                mov_instruction_addr + 7 + rip_offset, "unsigned long long"
+            )
         return QuestClientManager(self.hook_handler, self._quest_client_manager_addr)
 
     async def character_registry(self) -> DynamicCharacterRegistry:
@@ -294,7 +312,7 @@ class Client:
             mov_instruction_addrs = await self.hook_handler.pattern_scan(
                 b"\x48\x8B\x05....\x48\x8B\x88\x30\x01\x00\x00",
                 module="WizardGraphicalClient.exe",
-                return_multiple=True
+                return_multiple=True,
             )
             if len(mov_instruction_addrs) != 2:
                 raise PatternMultipleResults("")
@@ -303,8 +321,12 @@ class Client:
                 mov_instruction_addr + 3, "int"
             )
             # 7 is the length of this instruction
-            self._character_registry_addr = await self.hook_handler.read_typed(mov_instruction_addr + 7 + rip_offset, "unsigned long long")
-        return DynamicCharacterRegistry(self.hook_handler, self._character_registry_addr)
+            self._character_registry_addr = await self.hook_handler.read_typed(
+                mov_instruction_addr + 7 + rip_offset, "unsigned long long"
+            )
+        return DynamicCharacterRegistry(
+            self.hook_handler, self._character_registry_addr
+        )
 
     async def quest_id(self) -> int:
         """
@@ -390,7 +412,7 @@ class Client:
         return int(used), int(total)
 
     async def wait_for_zone_change(
-            self, name: Optional[str] = None, *, sleep_time: Optional[float] = 0.5
+        self, name: str | None = None, *, sleep_time: float | None = 0.5
     ):
         """
         Wait for the client's zone to change
@@ -444,7 +466,7 @@ class Client:
         """
         await utils.timed_send_key(self.window_handle, key, seconds)
 
-    async def send_hotkey(self, modifers: List[Keycode], key: Keycode):
+    async def send_hotkey(self, modifers: list[Keycode], key: Keycode):
         """
         send a hotkey
 
@@ -476,14 +498,14 @@ class Client:
         await utils.timed_send_key(self.window_handle, Keycode.W, move_seconds)
 
     async def teleport(
-            self,
-            xyz: XYZ,
-            yaw: float = None,
-            *,
-            wait_on_inuse: bool = True,
-            wait_on_inuse_timeout: float = 1.0,
-            purge_on_after_unuser_fixer: bool = True,
-            purge_on_after_unuser_fixer_timeout: float = 0.6,
+        self,
+        xyz: XYZ,
+        yaw: float = None,
+        *,
+        wait_on_inuse: bool = True,
+        wait_on_inuse_timeout: float = 1.0,
+        purge_on_after_unuser_fixer: bool = True,
+        purge_on_after_unuser_fixer_timeout: float = 0.6,
     ):
         """
         Teleport the client
@@ -513,13 +535,13 @@ class Client:
             await self.body.write_yaw(yaw)
 
     async def _teleport_object(
-            self,
-            object_address: int,
-            xyz: XYZ,
-            wait_on_inuse: bool = True,
-            wait_on_inuse_timeout: float = 1.0,
-            purge_on_after_unuser_fixer: bool = True,
-            purge_on_after_unuser_fixer_timeout: float = 0.6,
+        self,
+        object_address: int,
+        xyz: XYZ,
+        wait_on_inuse: bool = True,
+        wait_on_inuse_timeout: float = 1.0,
+        purge_on_after_unuser_fixer: bool = True,
+        purge_on_after_unuser_fixer_timeout: float = 0.6,
     ):
         if not self.hook_handler._check_if_hook_active(MovementTeleportHook):
             raise RuntimeError("Movement teleport not active")
@@ -551,7 +573,9 @@ class Client:
                     timeout=purge_on_after_unuser_fixer_timeout,
                 )
             except ExceptionalTimeout:
-                movement_teleport_hook = self.hook_handler._get_hook_by_type(MovementTeleportHook)
+                movement_teleport_hook = self.hook_handler._get_hook_by_type(
+                    MovementTeleportHook
+                )
                 for je, old_bytes in zip(jes, movement_teleport_hook._old_jes_bytes):
                     await self.hook_handler.write_bytes(je, old_bytes)
 
@@ -565,8 +589,7 @@ class Client:
             return self._je_instruction_forward_backwards
 
         movement_state_instruction_addr = await self.hook_handler.pattern_scan(
-            rb"\x8B\x5F\x70\xF3",
-            module="WizardGraphicalClient.exe"
+            rb"\x8B\x5F\x70\xF3", module="WizardGraphicalClient.exe"
         )
 
         self._je_instruction_forward_backwards = (
@@ -630,7 +653,9 @@ class Client:
             return
 
         movement_update_address = await self._get_movement_update_address()
-        self._movement_update_original_bytes = await self.hook_handler.read_bytes(movement_update_address, 3)
+        self._movement_update_original_bytes = await self.hook_handler.read_bytes(
+            movement_update_address, 3
+        )
         # 3x nop
         await self.hook_handler.write_bytes(movement_update_address, b"\x90\x90\x90")
 
@@ -641,7 +666,9 @@ class Client:
             return
 
         movement_update_address = await self._get_movement_update_address()
-        await self.hook_handler.write_bytes(movement_update_address, self._movement_update_original_bytes)
+        await self.hook_handler.write_bytes(
+            movement_update_address, self._movement_update_original_bytes
+        )
 
         self._movement_update_patched = False
 
@@ -651,7 +678,7 @@ class Client:
 
         self._movement_update_address = await self.hook_handler.pattern_scan(
             rb"\xFF\x50.\x48\x8B\x83....\x48\x8D..\x48\x2B",
-            module="WizardGraphicalClient.exe"
+            module="WizardGraphicalClient.exe",
         )
 
         # OLD PATTERN; DO NOT REMOVE. Might be helpful to update the new pattern in case it breaks.

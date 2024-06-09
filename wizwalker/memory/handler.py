@@ -1,7 +1,5 @@
 import asyncio
 import struct
-from typing import Any
-import warnings
 
 import pymem
 import pymem.exception
@@ -17,7 +15,7 @@ from .hooks import (
     RootWindowHook,
     RenderContextHook,
     MovementTeleportHook,
-    MemoryHook
+    MemoryHook,
 )
 from .memory_reader import MemoryReader
 
@@ -42,7 +40,7 @@ class HookHandler(MemoryReader):
 
         self.client = client
 
-        self._autobot_address = None
+        self._autobot_address: int | None = None
         self._autobot_lock = None
         self._original_autobot_bytes = b""
         self._autobot_pos = 0
@@ -72,7 +70,7 @@ class HookHandler(MemoryReader):
         if addr is None:
             raise RuntimeError("Pattern scan failed for autobot pattern")
 
-        self._autobot_address = addr
+        self._autobot_address = addr  # type: ignore
 
     # noinspection PyTypeChecker
     async def _prepare_autobot(self):
@@ -146,7 +144,7 @@ class HookHandler(MemoryReader):
             raise HookNotReady(hook_name)
 
     # wait for an addr to be set and not 0
-    async def _wait_for_value(self, address: int, timeout: int = None):
+    async def _wait_for_value(self, address: int, timeout: int | None = None):
         async def _wait_for_value_task():
             while True:
                 try:
@@ -172,7 +170,7 @@ class HookHandler(MemoryReader):
 
     # TODO: make this faster
     async def activate_all_hooks(
-        self, *, wait_for_ready: bool = True, timeout: float = None
+        self, *, wait_for_ready: bool = True, timeout: float | None = None
     ):
         """
         Activate all hooks but mouseless
@@ -405,9 +403,9 @@ class HookHandler(MemoryReader):
         await root_window_hook.hook()
 
         self._active_hooks[RootWindowHook] = root_window_hook
-        self._base_addrs[
-            "current_root_window"
-        ] = root_window_hook.current_root_window_addr
+        self._base_addrs["current_root_window"] = (
+            root_window_hook.current_root_window_addr
+        )
 
         if wait_for_ready:
             await self._wait_for_value(
@@ -454,9 +452,9 @@ class HookHandler(MemoryReader):
         await render_context_hook.hook()
 
         self._active_hooks[RenderContextHook] = render_context_hook
-        self._base_addrs[
-            "current_render_context"
-        ] = render_context_hook.current_render_context_addr
+        self._base_addrs["current_render_context"] = (
+            render_context_hook.current_render_context_addr
+        )
 
         if wait_for_ready:
             await self._wait_for_value(
@@ -487,7 +485,7 @@ class HookHandler(MemoryReader):
         )
 
     async def activate_movement_teleport_hook(
-            self, *, wait_for_ready: bool = False, timeout: float = None
+        self, *, wait_for_ready: bool = False, timeout: float = None
     ):
         """
         Activate movement teleport hook
@@ -507,9 +505,7 @@ class HookHandler(MemoryReader):
         await movement_teleport_hook.hook()
 
         self._active_hooks[MovementTeleportHook] = movement_teleport_hook
-        self._base_addrs[
-            "teleport_helper"
-        ] = movement_teleport_hook.teleport_helper
+        self._base_addrs["teleport_helper"] = movement_teleport_hook.teleport_helper
 
     async def deactivate_movement_teleport_hook(self):
         """

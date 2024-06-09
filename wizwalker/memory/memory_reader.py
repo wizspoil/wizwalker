@@ -2,6 +2,7 @@ import asyncio
 import functools
 import regex
 import struct
+import typing
 from typing import Any, Union
 
 import pefile
@@ -135,8 +136,39 @@ class MemoryReader:
 
         return found
 
+    @typing.overload
     async def pattern_scan(
-        self, pattern: bytes, *, module: str = None, return_multiple: bool = False
+        self,
+        pattern: bytes,
+        *,
+        module: str | None = None,
+        return_multiple: typing.Literal[True],
+    ) -> list[int]: ...
+
+    @typing.overload
+    async def pattern_scan(
+        self,
+        pattern: bytes,
+        *,
+        module: str | None = None,
+        return_multiple: typing.Literal[False],
+    ) -> int: ...
+
+    @typing.overload
+    async def pattern_scan(
+        self,
+        pattern: bytes,
+        *,
+        module: str | None = None,
+        return_multiple: bool = False,
+    ) -> int: ...
+
+    async def pattern_scan(
+        self,
+        pattern: bytes,
+        *,
+        module: str | None = None,
+        return_multiple: bool = False,
     ) -> Union[list, int]:
         """
         Scan for a pattern
@@ -148,13 +180,15 @@ class MemoryReader:
 
         Raises:
             PatternFailed: If the pattern returned no results
-            PatternMultipleResults: If the pattern returned multiple results and return_multple is False
+            PatternMultipleResults: If the pattern returned multiple results and return_multiple is False
 
         Returns:
-            A list of results if return_multple is True otherwise one result
+            A list of results if return_multiple is True otherwise one result
         """
         if module:
-            module_object = pymem.process.module_from_name(self.process.process_handle, module)
+            module_object = pymem.process.module_from_name(
+                self.process.process_handle, module
+            )
 
             if module_object is None:
                 raise ValueError(f"{module} module not found.")
@@ -190,7 +224,7 @@ class MemoryReader:
         module_name: str,
         symbol_name: str,
         *,
-        module_dir: str = None,
+        module_dir: str | None = None,
         force_reload: bool = False,
     ) -> int:
         """
@@ -271,7 +305,7 @@ class MemoryReader:
         Raises:
             ClientClosedError: If the client is closed
             MemoryReadError: If there was an error reading memory
-            AddressOutOfRange: If the addrress is out of bounds
+            AddressOutOfRange: If the address is out of bounds
         """
         if not 0 < address <= 0x7FFFFFFFFFFFFFFF:
             raise AddressOutOfRange(address)

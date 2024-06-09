@@ -4,7 +4,6 @@ import ctypes.wintypes
 import struct
 from typing import Any, Tuple
 from contextlib import suppress
-import warnings
 
 from loguru import logger
 
@@ -13,7 +12,7 @@ from wizwalker.constants import kernel32
 
 
 class MemoryHook(MemoryReader):
-    def __init__(self, hook_handler, hook_cache = {}):
+    def __init__(self, hook_handler, hook_cache={}):
         super().__init__(hook_handler.process)
         self.hook_handler = hook_handler
         self._hook_cache = hook_cache
@@ -28,20 +27,20 @@ class MemoryHook(MemoryReader):
         # so we can dealloc it on unhook
         self._allocated_addresses = []
 
-    def _get_my_cache(self):
+    def _get_my_cache(self) -> dict[str, int]:
         if self._hook_cache is None:
             self._hook_cache = {type(self): {}}
         if type(self) not in self._hook_cache:
             self._hook_cache[type(self)] = {}
         return self._hook_cache[type(self)]
-    
-    def _is_cached(self, name):
+
+    def _is_cached(self, name) -> bool:
         return name in self._get_my_cache()
 
-    def _cache(self, name, value):
+    def _cache(self, name: str, value: int):
         self._get_my_cache()[name] = value
 
-    def _get_cached(self, name):
+    def _get_cached(self, name) -> int:
         return self._get_my_cache()[name]
 
     async def alloc(self, size: int) -> int:
@@ -64,7 +63,7 @@ class MemoryHook(MemoryReader):
         """
         pass
 
-    async def get_jump_address(self, pattern: bytes, module: str = None) -> int:
+    async def get_jump_address(self, pattern: bytes, module: str | None = None) -> int:
         """
         gets the address to write jump at
         """
@@ -157,13 +156,16 @@ class SimpleHook(AutoBotBaseHook):
     Simple hook for writing hooks that are simple ofc
     """
 
-    pattern = None
+    pattern: bytes | None = None
     module = "WizardGraphicalClient.exe"
     instruction_length = 5
-    exports = None
+    exports: list[tuple[str, int]] | None = None
     noops = 0
 
     async def get_pattern(self):
+        if self.pattern is None:
+            raise ValueError(f"pattern not set for {self.__class__.__name__}")
+
         return self.pattern, self.module
 
     async def get_jump_bytecode(self) -> bytes:
@@ -174,17 +176,18 @@ class SimpleHook(AutoBotBaseHook):
 
         return b"\xE9" + packed_relitive_jump + (b"\x90" * self.noops)
 
-    async def bytecode_generator(self, packed_exports):
+    async def bytecode_generator(self, packed_exports: list[tuple[str, bytes]]):
         raise NotImplemented()
 
     async def get_hook_bytecode(self) -> bytes:
-        packed_exports = []
-        for export in self.exports:
-            # addr = self.alloc(export[1])
-            addr = self.hook_handler.process.allocate(export[1])
-            setattr(self, export[0], addr)
-            packed_addr = struct.pack("<Q", addr)
-            packed_exports.append((export[0], packed_addr))
+        packed_exports: list[tuple[str, bytes]] = []
+        if self.exports is not None:
+            for export in self.exports:
+                # addr = self.alloc(export[1])
+                addr = self.hook_handler.process.allocate(export[1])
+                setattr(self, export[0], addr)
+                packed_addr = struct.pack("<Q", addr)
+                packed_exports.append((export[0], packed_addr))
 
         bytecode = await self.bytecode_generator(packed_exports)
 
@@ -199,9 +202,10 @@ class SimpleHook(AutoBotBaseHook):
 
     async def unhook(self):
         await super().unhook()
-        for export in self.exports:
-            if getattr(self, export[0], None):
-                await self.free(getattr(self, export[0]))
+        if self.exports is not None:
+            for export in self.exports:
+                if getattr(self, export[0], None):
+                    await self.free(getattr(self, export[0]))
 
 
 class PlayerHook(SimpleHook):
@@ -259,7 +263,7 @@ class QuestHook(SimpleHook):
 
                 b"\x48\xA3" + packed_exports[0][1] +  # mov [export],rax
                 b"\x58"  # pop rax
-                b"\xF3\x41\x0F\x10\x87\xFC\x0C\x00\x00"  # original code 
+                b"\xF3\x41\x0F\x10\x87\xFC\x0C\x00\x00"  # original code
         )
         # fmt: on
         return bytecode
@@ -275,7 +279,7 @@ class ClientHook(SimpleHook):
     noops = 2
 
     # this is because the 18 byte at the start was tacked on
-    async def get_jump_address(self, pattern: bytes, module: str = None) -> int:
+    async def get_jump_address(self, pattern: bytes, module: str | None = None) -> int:
         """
         gets the address to write jump at
         """
@@ -338,11 +342,13 @@ class RenderContextHook(SimpleHook):
 
 
 class MovementTeleportHook(SimpleHook):
-    pattern = rb"\x40\x57\x48\x83\xEC\x30\x48\xC7\x44\x24\x20\xFE" \
-              rb"\xFF\xFF\xFF\x48\x89\x5C\x24\x40\x48\x8B\x99\xB0" \
-              rb"\x01\x00\x00\x48\x85\xDB\x74\x13\x4C\x8B\x43\x70" \
-              rb"\x48\x8B\x5B\x78\x48\x85\xDB\x74\x0C\xF0\xFF\x43" \
-              rb"\x08\xEB\x06\x45\x33\xC0\x41\x8B\xD8\x4D\x85\xC0\x74\x19"
+    pattern = (
+        rb"\x40\x57\x48\x83\xEC\x30\x48\xC7\x44\x24\x20\xFE"
+        rb"\xFF\xFF\xFF\x48\x89\x5C\x24\x40\x48\x8B\x99\xB0"
+        rb"\x01\x00\x00\x48\x85\xDB\x74\x13\x4C\x8B\x43\x70"
+        rb"\x48\x8B\x5B\x78\x48\x85\xDB\x74\x0C\xF0\xFF\x43"
+        rb"\x08\xEB\x06\x45\x33\xC0\x41\x8B\xD8\x4D\x85\xC0\x74\x19"
+    )
     instruction_length = 6
     noops = 1
     # position vector = 12 + 1 for update bool + 8 for target object address
@@ -353,7 +359,9 @@ class MovementTeleportHook(SimpleHook):
     _collision_je_addrs = None
     _old_je_page_protection = None
 
-    def _set_page_protection(self, address: int, protections: int, size: int = 24) -> int:
+    def _set_page_protection(
+        self, address: int, protections: int, size: int = 24
+    ) -> int:
         old_protection = ctypes.wintypes.DWORD()
         target_address_passable = ctypes.c_uint64(address)
 
@@ -366,14 +374,18 @@ class MovementTeleportHook(SimpleHook):
         )
 
         if result == 0:
-            raise RuntimeError(f"Movement teleport virtual protect returned 0 result={result}")
+            raise RuntimeError(
+                f"Movement teleport virtual protect returned 0 result={result}"
+            )
 
         return old_protection.value
 
     async def _wait_for_update_bool_unset_with_timeout(self):
         async def _inner():
             while True:
-                should_update = await self.hook_handler.client._teleport_helper.should_update()
+                should_update = (
+                    await self.hook_handler.client._teleport_helper.should_update()
+                )
 
                 if should_update is False:
                     return
@@ -401,7 +413,10 @@ class MovementTeleportHook(SimpleHook):
         old_event_dispatch_je_addr = await self.read_bytes(event_dispatch_je_addr, 2)
 
         self._collision_je_addrs = (inside_event_je_addr, event_dispatch_je_addr)
-        self._old_collision_jes_bytes = (old_inside_event_je_bytes, old_event_dispatch_je_addr)
+        self._old_collision_jes_bytes = (
+            old_inside_event_je_bytes,
+            old_event_dispatch_je_addr,
+        )
 
         for addr in self._collision_je_addrs:
             await self.write_bytes(addr, b"\x90\x90")
@@ -523,7 +538,9 @@ class MovementTeleportHook(SimpleHook):
         for je, je_bytes in zip(jes, self._old_jes_bytes):
             await self.hook_handler.write_bytes(je, je_bytes)
 
-        for addr, old_bytes in zip(self._collision_je_addrs, self._old_collision_jes_bytes):
+        for addr, old_bytes in zip(
+            self._collision_je_addrs, self._old_collision_jes_bytes
+        ):
             await self.write_bytes(addr, old_bytes)
 
         self._set_page_protection(jes[0], self._old_je_page_protection)
@@ -541,12 +558,12 @@ class User32GetClassInfoBaseHook(AutoBotBaseHook):
     )
     # rounded down
     AUTOBOT_SIZE = 1200
-    
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._hooked_instances = 0
         # How far into the function we are
-        self._autobot_bytes_offset = 0 
+        self._autobot_bytes_offset = 0
         self._autobot_addr = None
         self._autobot_original_bytes = None
 
@@ -587,7 +604,7 @@ class User32GetClassInfoBaseHook(AutoBotBaseHook):
 
 
 class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
-    def __init__(self, memory_handler, hook_cache = {}):
+    def __init__(self, memory_handler, hook_cache={}):
         super().__init__(memory_handler, hook_cache=hook_cache)
         self.mouse_pos_addr = None
 
@@ -660,7 +677,7 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
         await self.write_bytes(bool_one_address, b"\x01")
         await self.write_bytes(bool_two_address, b"\x01")
 
-        set_cursor_pos = None
+        set_cursor_pos: int | None = None
         if not self._is_cached("SetCursorPos"):
             if a := await self.get_address_from_symbol("user32.dll", "SetCursorPos"):
                 self._cache("SetCursorPos", a)
@@ -689,6 +706,9 @@ class MouselessCursorMoveHook(User32GetClassInfoBaseHook):
                 return a
         else:
             return self._get_cached("GetCursorPos")
+
+        # TODO: fix the cache thing
+        raise RuntimeError("cache invalidated")
 
     async def get_jump_bytecode(self) -> bytes:
         # distance = end - start

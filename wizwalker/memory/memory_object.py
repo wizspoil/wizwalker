@@ -8,7 +8,7 @@ from wizwalker.errors import (
     MemoryReadError,
     ReadingEnumFailed,
     PatternFailed,
-    PatternMultipleResults
+    PatternMultipleResults,
 )
 from wizwalker.utils import XYZ, Orient
 from .handler import HookHandler
@@ -42,10 +42,10 @@ class MemoryObject(MemoryReader):
         await self.write_typed(base_address + offset, value, data_type)
 
     async def pattern_scan_offset(
-            self,
-            pattern: bytes,
-            instruction_length: int,
-            static_backup: int = None,
+        self,
+        pattern: bytes,
+        instruction_length: int,
+        static_backup: int | None = None,
     ) -> int:
         try:
             addr = await self.pattern_scan(pattern, module="WizardGraphicalClient.exe")
@@ -57,16 +57,18 @@ class MemoryObject(MemoryReader):
             raise exc
 
     async def pattern_scan_offset_cached(
-            self,
-            pattern: bytes,
-            instruction_length: int,
-            name: str,
-            static_backup: int = None
+        self,
+        pattern: bytes,
+        instruction_length: int,
+        name: str,
+        static_backup: int | None = None,
     ):
         try:
             return self._offset_lookup_cache[name]
         except KeyError:
-            offset = await self.pattern_scan_offset(pattern, instruction_length, static_backup)
+            offset = await self.pattern_scan_offset(
+                pattern, instruction_length, static_backup
+            )
             self._offset_lookup_cache[name] = offset
             return offset
 
@@ -318,10 +320,10 @@ class MemoryObject(MemoryReader):
         return pointers
 
     async def read_inlined_vector(
-            self,
-            offset: int,
-            object_size: int,
-            object_type: type,
+        self,
+        offset: int,
+        object_size: int,
+        object_type: type,
     ):
         start = await self.read_value_from_offset(offset, "unsigned long long")
         end = await self.read_value_from_offset(offset + 16, "unsigned long long")
@@ -391,13 +393,15 @@ class MemoryObject(MemoryReader):
     #      # impl method to read here
     #      ...
     #  read_complex_from_offset(0x80, StdMap)
-    async def read_std_map(self, offset: int, mapped_type: Type["MemoryObject"]) -> dict:
+    async def read_std_map(
+        self, offset: int, mapped_type: Type["MemoryObject"]
+    ) -> dict:
         mapped_return = {}
 
         root = await self.read_value_from_offset(offset, "unsigned long long")
         first_node = await self.read_typed(root + 0x8, "unsigned long long")
         if first_node == root:
-          return {}
+            return {}
 
         await self._get_std_map_children(first_node, mapped_type, mapped_return)
         return mapped_return

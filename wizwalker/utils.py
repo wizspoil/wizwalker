@@ -5,6 +5,7 @@ import io
 import math
 import struct
 import subprocess
+import typing
 
 # noinspection PyCompatibility
 import winreg
@@ -459,13 +460,13 @@ async def maybe_wait_for_value_with_timeout(
         )
 
 
-async def maybe_wait_for_any_value_with_timeout(
-    coro,
+async def maybe_wait_for_any_value_with_timeout[T](
+    coro: typing.Callable[[], typing.Awaitable[T]],
     sleep_time: float = 0.5,
     *,
     timeout: Optional[float] = None,
     ignore_exceptions: bool = True,
-):
+) -> T:
     possible_exception = None
 
     async def _inner():
@@ -680,7 +681,7 @@ def get_windows_from_predicate(predicate: Callable) -> list:
 
 
 # TODO: 2.0 move all these pharse functions to cache_handler, and rename them to parse instead of pharse
-def pharse_template_id_file(file_data: bytes) -> dict:
+def pharse_template_id_file(file_data: bytes) -> dict[int, str]:
     """
     Pharse a template id file's data
     """

@@ -2,7 +2,6 @@ import json
 from collections import defaultdict
 from functools import cached_property
 from pathlib import Path
-from typing import List, Optional, Union
 
 import aiofiles
 from loguru import logger
@@ -13,8 +12,8 @@ from .wad import Wad
 
 class CacheHandler:
     def __init__(self):
-        self._wad_cache = None
-        self._template_ids = None
+        self._wad_cache: defaultdict[str, defaultdict[str, int]] | None = None
+        self._template_ids: dict[str, str] | None = None
         self._node_cache = None
 
         self._root_wad = Wad.from_game_data("root")
@@ -33,9 +32,7 @@ class CacheHandler:
         """
         return utils.get_cache_folder()
 
-    async def _check_updated(
-        self, wad_file: Wad, files: Union[List[str], str]
-    ) -> List[str]:
+    async def _check_updated(self, wad_file: Wad, files: list[str] | str) -> list[str]:
         if isinstance(files, str):
             files = [files]
 
@@ -59,9 +56,7 @@ class CacheHandler:
 
         return res
 
-    async def check_updated(
-        self, wad_file: Wad, files: Union[List[str], str]
-    ) -> List[str]:
+    async def check_updated(self, wad_file: Wad, files: list[str] | str) -> list[str]:
         """
         Checks if some wad files have changed since we last accessed them
 
@@ -97,7 +92,7 @@ class CacheHandler:
                 json_data = json.dumps(pharsed_template_ids)
                 await fp.write(json_data)
 
-    async def get_template_ids(self) -> dict:
+    async def get_template_ids(self) -> dict[str, str]:
         """
         Loads template ids from cache
 
@@ -109,10 +104,10 @@ class CacheHandler:
             async with aiofiles.open(self.cache_dir / "template_ids.json") as fp:
                 message_data = await fp.read()
             self._template_ids = json.loads(message_data)
-        return self._template_ids
+        return self._template_ids  # type: ignore
 
     @staticmethod
-    def _parse_lang_file(file_data):
+    def _parse_lang_file(file_data: bytes) -> None | dict[str, dict[str, str]]:
         try:
             decoded = file_data.decode("utf-16")
 
@@ -130,8 +125,8 @@ class CacheHandler:
 
         return {lang_name: lang_mapping}
 
-    async def _get_all_lang_file_names(self, root_wad: Wad) -> List[str]:
-        lang_file_names = []
+    async def _get_all_lang_file_names(self, root_wad: Wad) -> list[str]:
+        lang_file_names: list[str] = []
 
         for file_name in await root_wad.names():
             if file_name.startswith("Locale/English/"):
@@ -139,7 +134,9 @@ class CacheHandler:
 
         return lang_file_names
 
-    async def _read_lang_file(self, root_wad: Wad, lang_file: str):
+    async def _read_lang_file(
+        self, root_wad: Wad, lang_file: str
+    ) -> None | dict[str, dict[str, str]]:
         file_data = await root_wad.get_file(lang_file)
         parsed_lang = self._parse_lang_file(file_data)
 
@@ -176,7 +173,7 @@ class CacheHandler:
             json_data = json.dumps(lang_map)
             await fp.write(json_data)
 
-    async def _get_langcode_map(self) -> dict:
+    async def _get_langcode_map(self) -> dict[str, dict[str, str]]:
         try:
             async with aiofiles.open(self.cache_dir / "langmap.json") as fp:
                 data = await fp.read()
@@ -189,7 +186,7 @@ class CacheHandler:
     async def cache_all_langcode_maps(self):
         await self._cache_lang_files(self._root_wad)
 
-    async def get_langcode_map(self) -> dict:
+    async def get_langcode_map(self) -> dict[str, dict[str, str]]:
         """
         Gets the langcode map
 
@@ -197,7 +194,7 @@ class CacheHandler:
         """
         return await self._get_langcode_map()
 
-    async def get_wad_cache(self) -> dict:
+    async def get_wad_cache(self) -> defaultdict[str, defaultdict[str, int]]:
         """
         Gets the wad cache data
 
@@ -212,10 +209,12 @@ class CacheHandler:
         except OSError:
             data = None
 
-        wad_cache = defaultdict(lambda: defaultdict(lambda: -1))
+        wad_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(
+            lambda: defaultdict(lambda: -1)
+        )
 
         if data:
-            wad_cache_data = json.loads(data)
+            wad_cache_data: dict[str, dict[str, int]] = json.loads(data)
 
             # this is so the default dict inside the default dict isn't replaced
             # by .update
@@ -233,7 +232,7 @@ class CacheHandler:
             json_data = json.dumps(self._wad_cache)
             await fp.write(json_data)
 
-    async def get_template_name(self, template_id: int) -> Optional[str]:
+    async def get_template_name(self, template_id: int) -> str | None:
         """
         Get the template name of something by id
 
@@ -247,7 +246,7 @@ class CacheHandler:
 
         return template_ids.get(str(template_id))
 
-    async def get_langcode_name(self, langcode: str):
+    async def get_langcode_name(self, langcode: str) -> str:
         """
         Get the langcode name from the langcode i.e Spells_00001
 

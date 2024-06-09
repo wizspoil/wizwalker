@@ -39,7 +39,7 @@ class InstanceFinder(MemoryReader):
         string_bytes = search_bytes[:string_end]
         return string_bytes.decode(encoding)
 
-    async def scan_for_pointer(self, address: int):
+    async def scan_for_pointer(self, address: int) -> list[int]:
         pattern = regex.escape(struct.pack("<q", address))
         try:
             return await self.pattern_scan(pattern, return_multiple=True)
