@@ -8,7 +8,6 @@ from click_default_group import DefaultGroup
 from loguru import logger
 
 from wizwalker import Wad, ClientHandler, utils
-from wizwalker.cli.console import start_console
 
 
 logger.enable("wizwalker")
@@ -39,6 +38,9 @@ def cli():
     """
     if sys.platform != "win32":
         raise RuntimeError(f"This program is windows only, not {sys.platform}")
+
+    # why does this still exist
+    from wizwalker.cli.console import start_console
 
     walker = ClientHandler()
     start_console(locals={"walker": walker})
